@@ -327,7 +327,3 @@ terraform destroy
 - Movie categories and tags
 - Search and filter functionality
 - User profiles and preferences
-
-## License
-
-This project is provided as-is for educational and demonstration purposes.
