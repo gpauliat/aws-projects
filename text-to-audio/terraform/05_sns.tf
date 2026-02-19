@@ -8,4 +8,3 @@ resource "aws_sns_topic_subscription" "email_subscription" {
     protocol  = "email"
     endpoint  = var.email_adresses[count.index]
 }
-

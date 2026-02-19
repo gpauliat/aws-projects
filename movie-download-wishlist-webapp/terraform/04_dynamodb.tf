@@ -17,16 +17,6 @@ resource "aws_dynamodb_table" "movies" {
     enabled = var.enable_dynamodb_point_in_time_recovery
   }
 
-  # Server-side encryption at rest
-  server_side_encryption {
-    enabled = true
-  }
-
-  # TTL disabled (we want to keep all movies)
-  ttl {
-    enabled = false
-  }
-
   tags = {
     Name = "${var.project_name}-${var.environment}-movies"
   }
@@ -61,16 +51,6 @@ resource "aws_dynamodb_table" "interests" {
   # Point-in-time recovery for data protection
   point_in_time_recovery {
     enabled = var.enable_dynamodb_point_in_time_recovery
-  }
-
-  # Server-side encryption at rest
-  server_side_encryption {
-    enabled = true
-  }
-
-  # TTL disabled (we want to keep all interests)
-  ttl {
-    enabled = false
   }
 
   tags = {
