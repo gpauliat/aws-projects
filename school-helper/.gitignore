@@ -91,3 +91,7 @@ yarn.lock
 *.zip
 lambda_function.zip
 
+#Examples or lessons
+README.example
+project.docx
+project.pdf
