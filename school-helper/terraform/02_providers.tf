@@ -5,6 +5,7 @@ provider "aws" {
     tags = {
       Project     = var.project_name
       Owner = "gautier"
+      auto-delete = "never"
       Environment = var.environment
     }
   }
