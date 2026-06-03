@@ -1,6 +1,22 @@
-# Bedrock Knowledge Base with OpenSearch Serverless Vector Store
+# Bedrock Knowledge Base with S3 Vectors Store
 
 data "aws_caller_identity" "current" {}
+
+# ---------------------------------------------------------------------------
+# S3 Vector Bucket and Index
+# ---------------------------------------------------------------------------
+
+resource "aws_s3vectors_vector_bucket" "kb" {
+  vector_bucket_name = "${var.project_name}-kb-vectors"
+}
+
+resource "aws_s3vectors_index" "kb" {
+  index_name         = "bedrock-knowledge-base-default-index"
+  vector_bucket_name = aws_s3vectors_vector_bucket.kb.vector_bucket_name
+  dimension          = 1024
+  distance_metric    = "cosine"
+  data_type          = "float32"
+}
 
 # ---------------------------------------------------------------------------
 # IAM Role for Bedrock Knowledge Base
@@ -40,11 +56,24 @@ data "aws_iam_policy_document" "kb" {
     ]
   }
 
-  # OpenSearch Serverless — write and read vectors
+  # S3 Vectors — read and write vectors
   statement {
-    effect    = "Allow"
-    actions   = ["aoss:APIAccessAll"]
-    resources = [aws_opensearchserverless_collection.kb.arn]
+    effect = "Allow"
+    actions = [
+      "s3vectors:CreateIndex",
+      "s3vectors:DeleteIndex",
+      "s3vectors:GetIndex",
+      "s3vectors:ListIndexes",
+      "s3vectors:PutVectors",
+      "s3vectors:GetVectors",
+      "s3vectors:DeleteVectors",
+      "s3vectors:QueryVectors",
+      "s3vectors:ListVectors",
+    ]
+    resources = [
+      aws_s3vectors_vector_bucket.kb.vector_bucket_arn,
+      "${aws_s3vectors_vector_bucket.kb.vector_bucket_arn}/*",
+    ]
   }
 
   # Bedrock — invoke the embedding model
@@ -62,129 +91,12 @@ resource "aws_iam_role_policy" "kb" {
 }
 
 # ---------------------------------------------------------------------------
-# OpenSearch Serverless Collection (Vector Store)
-# ---------------------------------------------------------------------------
-
-resource "aws_opensearchserverless_security_policy" "kb_encryption" {
-  name = "${var.project_name}-kb-enc"
-  type = "encryption"
-  policy = jsonencode({
-    Rules = [{
-      ResourceType = "collection"
-      Resource     = ["collection/${var.project_name}-kb"]
-    }]
-    AWSOwnedKey = true
-  })
-}
-
-resource "aws_opensearchserverless_security_policy" "kb_network" {
-  name = "${var.project_name}-kb-net"
-  type = "network"
-  policy = jsonencode([{
-    Rules = [{
-      ResourceType = "collection"
-      Resource     = ["collection/${var.project_name}-kb"]
-    }]
-    AllowFromPublic = true
-  }])
-}
-
-resource "aws_opensearchserverless_access_policy" "kb" {
-  name = "${var.project_name}-kb-access"
-  type = "data"
-  policy = jsonencode([{
-    Rules = [
-      {
-        ResourceType = "index"
-        Resource     = ["index/${var.project_name}-kb/*"]
-        Permission   = ["aoss:CreateIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"]
-      },
-      {
-        ResourceType = "collection"
-        Resource     = ["collection/${var.project_name}-kb"]
-        Permission   = ["aoss:CreateCollectionItems", "aoss:DescribeCollectionItems", "aoss:UpdateCollectionItems"]
-      },
-    ]
-    Principal = [aws_iam_role.kb.arn, data.aws_caller_identity.current.arn]
-  }])
-}
-
-resource "aws_opensearchserverless_collection" "kb" {
-  name = "${var.project_name}-kb"
-  type = "VECTORSEARCH"
-
-  depends_on = [
-    aws_opensearchserverless_security_policy.kb_encryption,
-    aws_opensearchserverless_security_policy.kb_network,
-    aws_opensearchserverless_access_policy.kb,
-  ]
-
-  tags = {
-    Name = "${var.project_name}-kb"
-  }
-}
-
-# ---------------------------------------------------------------------------
 # Bedrock Knowledge Base
 # ---------------------------------------------------------------------------
 
-# Create the vector index in OpenSearch Serverless before the KB references it
-resource "null_resource" "kb_index" {
-  depends_on = [aws_opensearchserverless_collection.kb]
-
-  provisioner "local-exec" {
-    interpreter = ["python", "-c"]
-    command     = <<-EOT
-import subprocess, sys, json
-
-body = json.dumps({
-    "settings": {
-        "index": {
-            "knn": True,
-            "knn.algo_param.ef_search": 512
-        }
-    },
-    "mappings": {
-        "properties": {
-            "bedrock-knowledge-base-default-vector": {
-                "type": "knn_vector",
-                "dimension": 1024,
-                "method": {
-                    "engine": "faiss",
-                    "space_type": "l2",
-                    "name": "hnsw",
-                    "parameters": {}
-                }
-            },
-            "AMAZON_BEDROCK_TEXT_CHUNK": {
-                "type": "text"
-            },
-            "AMAZON_BEDROCK_METADATA": {
-                "type": "text",
-                "index": False
-            }
-        }
-    }
-})
-
-endpoint = "${aws_opensearchserverless_collection.kb.collection_endpoint}/bedrock-knowledge-base-default-index"
-result = subprocess.run(
-    ["awscurl", "--service", "aoss", "--region", "${var.aws_region}", "-X", "PUT", endpoint, "-H", "Content-Type: application/json", "-d", body],
-    capture_output=True, text=True
-)
-print(result.stdout)
-if result.returncode != 0:
-    print(result.stderr, file=sys.stderr)
-    sys.exit(result.returncode)
-    EOT
-  }
-}
-
 resource "aws_bedrockagent_knowledge_base" "this" {
-  name     = "${var.project_name}-kb"
+  name     = "gautier-quiz-kb"
   role_arn = aws_iam_role.kb.arn
-
-  depends_on = [null_resource.kb_index]
 
   knowledge_base_configuration {
     type = "VECTOR"
@@ -194,20 +106,19 @@ resource "aws_bedrockagent_knowledge_base" "this" {
   }
 
   storage_configuration {
-    type = "OPENSEARCH_SERVERLESS"
-    opensearch_serverless_configuration {
-      collection_arn    = aws_opensearchserverless_collection.kb.arn
-      vector_index_name = "bedrock-knowledge-base-default-index"
-      field_mapping {
-        vector_field   = "bedrock-knowledge-base-default-vector"
-        text_field     = "AMAZON_BEDROCK_TEXT_CHUNK"
-        metadata_field = "AMAZON_BEDROCK_METADATA"
-      }
+    type = "S3_VECTORS"
+    s3_vectors_configuration {
+      vector_bucket_arn = aws_s3vectors_vector_bucket.kb.vector_bucket_arn
+      index_name        = aws_s3vectors_index.kb.index_name
     }
   }
 
+  lifecycle {
+    create_before_destroy = false
+  }
+
   tags = {
-    Name = "${var.project_name}-kb"
+    Name = "gautier-quiz-kb"
   }
 }
 
@@ -218,7 +129,7 @@ resource "aws_bedrockagent_knowledge_base" "this" {
 resource "aws_bedrockagent_data_source" "pdfs" {
   name                 = "${var.project_name}-pdf-source"
   knowledge_base_id    = aws_bedrockagent_knowledge_base.this.id
-  data_deletion_policy = "RETAIN"
+  data_deletion_policy = "DELETE"
 
   data_source_configuration {
     type = "S3"
